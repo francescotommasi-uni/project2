@@ -1,0 +1,243 @@
+---
+title: "Report su una CNN per immagini"
+author: "Tommasi Francesco"
+subtitle: "Studio delle performance di una CNN binaria"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+  html_notebook:
+    toc: true
+  html_document:
+    toc: true
+    df_print: paged
+  word_document:
+    toc: true
+    wrap: 72
+editor_options: 
+  markdown: 
+
+---
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(readr)
+
+```
+
+# Consegna
+Creazione di una rete neurale di tipo CNN (convoluzionale) che classifichi e quindi distingua immagini di cane e gatto
+L'obiettivo è quindi studiare le performance della CNN in particolare l'accuratezza della rete e la loss function in base al modello utilizzato e ai parametri associati. Sono stati utilizzati Resnet18 e ModelNetv2.
+
+## Resnet18
+Questa rete neurale si basa su residual blocks che utilizzano scorciatoie. Ogni blocco applica normali convoluzioni standard (che guardano contemporaneamente colore e spazio dei pixel) e la scorciatoia consiste nel prendere l'input iniziale e sommarlo direttamente all'output del blocco. Questo evità la dispersione di informazioni all'aumentare della profondità della rete.
+Ha circa 12 milioni di parametri, una dimensione del file .pth di 45 Mb e esegue 1.8 miliardi di operazioni di calcolo, è quindi una rete molto precisa ma anche molto pesante.
+
+## MobileNet_v2
+CNN basata su Inverted Residuals + Linear Bottlenecks , MobileNetV2 invece di fare un calcolo unico e pesante, divide la convoluzione in due passaggi: prima analizza lo spazio pixel per pixel (canale per canale, separatamente), e poi unisce i canali con una convoluzione $1 \times 1$ riducendo i calcoli e Inverted Residual Block che Al contrario di ResNet  espande temporaneamente il numero di canali al centro del blocco per catturare più dettagli, e poi li ristringe alla fine.
+Qui , tra le parti strette vengono messe le scorciatoie riducendo drasticamente la RAM usata.
+La rete contiene 17 Bottleneck Blocks (cioè layer) e ognuno contiene 3 sottolayer per espanedere il canale , elaborare lo spazio e stringere i canali.
+3.5 Milioni di parametri , 14 Mb di spazio occupato e 300 milioni di operazioni di calcolo, molto più leggera ed efficiente di renset.
+
+# Studio delle performance 
+La rete studiata è allenata su un dataset di 22500 immagini con 2 modelli già preaddestrati. (https://www.kaggle.com/datasets/bhavikjikadara/dog-and-cat-classification-dataset) .
+Il preaddestramento dei modelli consiste nel fatto che queste due reti hanno già imparato le caratteristiche e i pesi da aasociare ad ognuna per distinguere le immagini. Il dataset su cui sono state allenate è di circa 14 milioni di foto.
+
+Entrambi le reti sono state create per lavorare sulle immagini, utilizzano filtri 3D (altezza larghezza pixel e colore ) che scorrono lungo l'immagine e in base ai pattern registrati associano ad ogni pixel un numero, creando centinaia di feature maps (nel nostro caso 512) corrispondenti ad ogni caratteristica importante per la classificazione. Infine la testa della rete guarda il vettore delle 512 caratteristiche e fa un calcolo pesato associando un peso ai due output e prendendo la decisione binaria finale. Di seguito sono illustrati i modelli e i risultati associati ad ogni modello.
+
+Le grandezze dei parametri sono :
+-32 per il batch poichè ho utilizzato una scheda video nvidia T4 in ambiente google colab e 32 è il  compromesso ottimale, satura bene i core della GPU rendendo l'addestramento veloce.
+
+-learning rate ( o passo) migliore è a 0.001 perchè troppo alto rischiamo che la mia CNN faccia passi da gigante mancando i punti minimi invece troppo piccolo come vederemo rischiamo  di dover fare mettere centinaia di epoche per avere una accuaratezza alta , con soltanto 5 epoche si fermerebbe ad una accuracy molto bassa (50-60%).
+Questo passo è associato all'ottimizzatore Adam che adatta il passo dinamicamente in base all'andamento della loss function quindi il passo stesso non è sempre fisso ma è dinamico.
+
+-5 epoche perchè mettendo il learning rate a quel valore mi bastano solamente 5 epoche rendendo l'addestramento molto veloce (circa 10 min per entrambe su una GPU nvidia T4 oppure circa 3h su una CPU del mio portatile che ha 10 core fisici e 16 logici)
+
+-Infine ho studiato anche l'effetto di utilizzare o meno i pesi delle feature già presenti all'interno dei modelli. Ho diviso l'analisi in due sezioni la prima caraterizzata dall'utilizzo di un passo molto piccolo 0.00001 ed eliminato i pesi di default e la seconda con pesi di default e passo di 0.001.
+
+
+# Pesi messi a 0
+Si svuotano i pesi di default di ogni modello mettendo $weights=None$ quando definisco il modello:
+
+```{r, echo=FALSE, fig.align='center', fig.cap="This is my caption"}
+# 1. Load the library
+library(knitr)
+
+# 2. Insert the picture from your local file
+include_graphics("C:/Users/frato/myproject2/svuotopesi.png")
+```
+
+
+Facendo questo si cancella tutta la memoria dei pesi e si inizializza tutti i milioni di pesi con numeri casuali.Le prime feature maps generate saranno quindi senza senso perchè sono puro rumore casuale. Inoltre per questo tipo di pesi associato ad un learning rate basso peggiorerebbe ancora di più l'accuratezza e per risolvere il problema cioè avere un'accuratezza alta si dovrebbe aumentare di moltpo il numero di epoche oppure alzare il passo.
+
+
+## MobileNet_V2
+
+```{r include=FALSE}
+mobilnetV2_2<- data.frame(
+  epoche<-c(1,2,3,4,5),
+  Loss_f<-c(0.668,0.655,0.649, 0.663, 0.6250),
+  accuracy<-c(59.55, 61.97, 63.25, 64.34, 66.02)
+  #accuracy2<-c(97.93, 97.35, 98.67, 98.70, 98.43),
+  #accuracy=mean(accuracy1,accuracy2)
+)
+```
+
+```{r echo=FALSE}
+ggplot(mobilnetV2_2, aes(x = epoche, y = accuracy)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Model Accuracy evolution over Epochs",
+       x = "Number of Epochs",
+       y = "Accuracy (%)" )
+```
+
+
+il test associato:
+
+```{r, echo=FALSE, fig.align='center', fig.cap="This is my caption"}
+# 1. Load the library
+library(knitr)
+
+# 2. Insert the picture from your local file
+include_graphics("C:/Users/frato/myproject2/mobilenetnonetest.png")
+```
+
+## Resnet18
+
+```{r include=FALSE}
+Resnet18_2<- data.frame(
+  epoche<-c(1,2,3,4,5),
+  Loss_f<-c(0.598,0.481,0.403, 0.320, 0.240),
+  accuracy<-c(71.31, 82.82, 88.83,76.77, 95.52)
+  #accuracy2<-c(97.93, 97.35, 98.67, 98.70, 98.43),
+  #accuracy=mean(accuracy1,accuracy2)
+)
+```
+
+```{r echo=FALSE}
+ggplot(mobilnetV2_2, aes(x = epoche, y = accuracy)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Model Accuracy evolution over Epochs",
+       x = "Number of Epochs",
+       y = "Accuracy (%)" )
+```
+```{r, echo=FALSE, fig.align='center', fig.cap="This is my caption"}
+# 1. Load the library
+library(knitr)
+
+# 2. Insert the picture from your local file
+include_graphics("C:/Users/frato/myproject2/resnetnone.png")
+```
+
+
+# Pesi di default
+Nel codice, anche facendo una sola epoca o usando un learning rate minuscolo, la rete parte già da un'accuratezza altissima (98-99%). L'addestramento serve solo a fare un piccolissimo "aggiustamento" (Fine-Tuning) per spiegare alla rete come associare quelle forme che già conosce ai due concetti di "Cane" e "Gatto".
+
+## Resnet18
+
+```{r}
+resnet18<-data.frame(
+  epoche<-c(1,2,3,4,5),
+  Loss_f<-c(0.163, 0.109, 0.090, 0.073, 0.061),
+  accuracy<-c(91.39, 92.04, 97.97, 98.07, 98.25)
+  
+)
+
+ggplot(resnet18, aes(x = epoche, y = accuracy)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Model Accuracy evolution over Epochs",
+       x = "Number of Epochs",
+       y = "Accuracy (%)" )
+```
+
+
+```{r}
+ggplot(resnet18, aes(x = epoche, y = Loss_f)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Model Accuracy evolution over Epochs",
+       x = "Number of Epochs",
+       y = "Accuracy (%)" )
+
+```
+
+Questa è la matrice di confusione associata al test di resnet18 .
+I risultati sono molto buoni con 98.33% di accuratezza per un dataset diverso da quello usato nel train.
+```{r, echo=FALSE, fig.align='center', fig.cap="This is my caption"}
+# 1. Load the library
+library(knitr)
+
+# 2. Insert the picture from your local file
+include_graphics("C:/Users/frato/myproject2/resnet.png")
+```
+
+
+
+## MobileNet_V2
+```{r include=FALSE}
+mobilnetV2<- data.frame(
+  epoche<-c(1,2,3,4,5),
+  Loss_f<-c(0.104,0.067,0.057, 0.048, 0.045),
+  accuracy<-c(97.93, 98.52, 99.03, 98.06, 98.81)
+  #accuracy2<-c(97.93, 97.35, 98.67, 98.70, 98.43),
+  #accuracy=mean(accuracy1,accuracy2)
+)
+```
+
+
+```{r echo=FALSE}
+ggplot(mobilnetV2, aes(x = epoche, y = accuracy)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  labs(title = "Model Accuracy evolution over Epochs",
+       x = "Number of Epochs",
+       y = "Accuracy (%)" )
+```
+
+l'accuratezza del modello ha un andamento che può sembrare strano in quanto cresce fino alla terza epoca per poi scendere leggermente (passa da 99.03 a 98.06 %). Questo potrebbe essere dovuto ad un leggere overfitting della rete e si potrebbe diminuire il passo (learning rate a 0.0001) per farla rallentare e fare in modo che si stabilizzi sui minimi tuttavia ha comunque una percentuale di accuratezza estremanente alta quindi decido di lasciarla così.
+
+
+```{r}
+ggplot(mobilnetV2, aes(x = epoche, y = Loss_f)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(title = "Model Accuracy evolution over Epochs",
+       x = "Number of Epochs",
+       y = "Accuracy (%)" )
+
+```
+
+La loss function invece ha un andamento corretto cioè cala con l'aumentare delle epoche toccando il valroe finale di 0.045.
+
+Questa è la matrice di confusione associata al test di mobilenet_v2 . 
+
+```{r, echo=FALSE, fig.align='center', fig.cap="This is my caption"}
+# 1. Load the library
+library(knitr)
+
+# 2. Insert the picture from your local file
+include_graphics("C:/Users/frato/myproject2/mobilnet.png")
+```
+
+
+# Conclusione:
+Entrambi le CNN offrono delle prestazioni molto alte con l'inserimento dei pesi dai modelli preaddestrati arrivando addirittura a toccare il 98.3 % con sole 5 epoche e circa 10 minuti di addestramento su una GPU nvidia T4.
+
+Viceversa non rispondono ugualmente quando togliamo i pesi del modello preaddestrato ma Resnet18 risponde molto meglio arrivando in sole 5 epoche e con un learning rate di 0.00001 a 95% di accuratezza contro il 66% di mobilenet_v2
+
+con questi comandi si può eventualmente vedere la struttura della rete e volendo agire di conseguenza
+
+mio_modello = get_model("mobilenet_v2", num_classes=2) 
+
+summary(mio_modello, input_size=(3, 224, 224))
+
+
+con questi comandi si può eventualmente vedere la struttura della rete e volendo agire di conseguenza
